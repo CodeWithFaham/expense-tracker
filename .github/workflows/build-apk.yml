@@ -24,7 +24,16 @@ jobs:
 
       - name: Fix Kotlin version
         run: |
-          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/' android/settings.gradle
+          FILE=""
+          if [ -f android/settings.gradle.kts ]; then FILE=android/settings.gradle.kts; fi
+          if [ -f android/settings.gradle ]; then FILE=android/settings.gradle; fi
+          if [ -n "$FILE" ]; then
+            echo "Patching $FILE"
+            sed -i -E 's/(kotlin\.android["'"'"']?[[:space:]]*\)?[[:space:]]*version[[:space:]]*["'"'"'])[0-9.]+/\11.9.24/' "$FILE"
+            cat "$FILE"
+          else
+            echo "No settings.gradle file found — skipping (may not be needed)"
+          fi
 
       - run: flutter pub get
 
