@@ -26,7 +26,7 @@ class ExpenseTrackerApp extends StatelessWidget {
           backgroundColor: Color(0xFFF3F5F4),
           foregroundColor: Colors.black87,
         ),
-        cardTheme: const CardThemeData(
+        cardTheme: const CardTheme(
           elevation: 0,
           margin: EdgeInsets.zero,
         ),
