@@ -18,9 +18,8 @@ jobs:
 
       - name: Generate missing platform files
         run: |
-          mkdir -p /tmp/scaffold
           cp -r . /tmp/scaffold_backup
-          flutter create --platforms=android --org com.expensetracker .
+          flutter create --platforms=android --project-name expense_tracker --org com.expensetracker .
           cp -r /tmp/scaffold_backup/lib/* lib/
           cp /tmp/scaffold_backup/pubspec.yaml .
 
