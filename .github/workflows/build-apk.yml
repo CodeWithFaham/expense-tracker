@@ -13,7 +13,6 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
           channel: 'stable'
 
       - name: Generate missing platform files
@@ -22,6 +21,10 @@ jobs:
           flutter create --platforms=android --project-name expense_tracker --org com.expensetracker .
           cp -r /tmp/scaffold_backup/lib/* lib/
           cp /tmp/scaffold_backup/pubspec.yaml .
+
+      - name: Fix Kotlin version
+        run: |
+          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/' android/settings.gradle
 
       - run: flutter pub get
 
