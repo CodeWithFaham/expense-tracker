@@ -14,7 +14,7 @@ class ExpenseTrackerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Expense Tracker',
+      title: 'Mera Kharcha',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -26,10 +26,6 @@ class ExpenseTrackerApp extends StatelessWidget {
           backgroundColor: Color(0xFFF3F5F4),
           foregroundColor: Colors.black87,
         ),
-        cardTheme: const CardTheme(
-          elevation: 0,
-          margin: EdgeInsets.zero,
-        ),
       ),
       home: const HomeScreen(),
     );
@@ -37,6 +33,7 @@ class ExpenseTrackerApp extends StatelessWidget {
 }
 
 /// ------------------- MODEL -------------------
+/// NOTE: `income` is kept LAST so old saved data keeps working.
 enum ExpenseCategory {
   petrol,
   daily,
@@ -51,6 +48,7 @@ enum ExpenseCategory {
   shopping,
   education,
   other,
+  income, // Jama / Wapsi -> minus from total kharcha
 }
 
 extension ExpenseCategoryExt on ExpenseCategory {
@@ -82,6 +80,8 @@ extension ExpenseCategoryExt on ExpenseCategory {
         return 'Education';
       case ExpenseCategory.other:
         return 'Other';
+      case ExpenseCategory.income:
+        return 'Jama / Wapsi';
     }
   }
 
@@ -113,6 +113,8 @@ extension ExpenseCategoryExt on ExpenseCategory {
         return Icons.school_rounded;
       case ExpenseCategory.other:
         return Icons.category_rounded;
+      case ExpenseCategory.income:
+        return Icons.savings_rounded;
     }
   }
 
@@ -139,11 +141,13 @@ extension ExpenseCategoryExt on ExpenseCategory {
       case ExpenseCategory.entertainment:
         return const Color(0xFF9C5FE0);
       case ExpenseCategory.shopping:
-        return const Color(0xFFE0507A);
+        return const Color(0xFFE08A50);
       case ExpenseCategory.education:
         return const Color(0xFF4A6FE0);
       case ExpenseCategory.other:
         return const Color(0xFF5B6EE1);
+      case ExpenseCategory.income:
+        return const Color(0xFF1E9E5A);
     }
   }
 }
@@ -162,6 +166,8 @@ class Expense {
     required this.note,
     required this.date,
   });
+
+  bool get isIncome => category == ExpenseCategory.income;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -212,7 +218,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   bool _showAllCategories = false;
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
-  final _currency = NumberFormat.currency(locale: 'en_PK', symbol: 'Rs ', decimalDigits: 0);
+  final _currency =
+      NumberFormat.currency(locale: 'en_PK', symbol: 'Rs ', decimalDigits: 0);
 
   @override
   void initState() {
@@ -234,8 +241,18 @@ class _HomeScreenState extends State<HomeScreen> {
             e.date.month == _selectedMonth.month;
       }).toList();
 
-  double get _monthTotal =>
-      _monthExpenses.fold(0.0, (sum, e) => sum + e.amount);
+  /// Total kharcha (jama wali entries shamil nahi)
+  double get _monthExpenseTotal => _monthExpenses
+      .where((e) => !e.isIncome)
+      .fold(0.0, (sum, e) => sum + e.amount);
+
+  /// Total jama / wapsi
+  double get _monthIncomeTotal => _monthExpenses
+      .where((e) => e.isIncome)
+      .fold(0.0, (sum, e) => sum + e.amount);
+
+  /// Net = kharcha minus jama
+  double get _netTotal => _monthExpenseTotal - _monthIncomeTotal;
 
   double _categoryTotal(ExpenseCategory cat) => _monthExpenses
       .where((e) => e.category == cat)
@@ -244,6 +261,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Categories that actually have spending this month, sorted highest first.
   List<MapEntry<ExpenseCategory, double>> get _activeCategoryTotals {
     final list = ExpenseCategory.values
+        .where((c) => c != ExpenseCategory.income)
         .map((c) => MapEntry(c, _categoryTotal(c)))
         .where((e) => e.value > 0)
         .toList();
@@ -260,7 +278,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (result != null) {
-      setState(() => _expenses.insert(0, result));
+      setState(() {
+        _expenses.insert(0, result);
+        _expenses.sort((a, b) => b.date.compareTo(a.date));
+      });
       await ExpenseStorage.save(_expenses);
     }
   }
@@ -277,7 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Groups this month's expenses by day (e.g. "Today", "Yesterday", "12 Aug 2026")
+  /// Groups this month's entries by day (Aaj / Kal / date)
   Map<String, List<Expense>> get _groupedByDay {
     final Map<String, List<Expense>> grouped = {};
     final now = DateTime.now();
@@ -299,6 +320,40 @@ class _HomeScreenState extends State<HomeScreen> {
     return grouped;
   }
 
+  Widget _miniStat(String title, double value, IconData icon) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.white70, size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                  Text(
+                    _currency.format(value),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final monthLabel = DateFormat('MMMM yyyy').format(_selectedMonth);
@@ -308,16 +363,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final activeCats = _activeCategoryTotals;
-    final visibleCats = _showAllCategories ? activeCats : activeCats.take(4).toList();
+    final visibleCats =
+        _showAllCategories ? activeCats : activeCats.take(4).toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Mera Kharcha', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Mera Kharcha',
+            style: TextStyle(fontWeight: FontWeight.bold)),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addExpense,
         icon: const Icon(Icons.add),
-        label: const Text('Kharcha Likhein'),
+        label: const Text('Likhein'),
       ),
       body: RefreshIndicator(
         onRefresh: _loadExpenses,
@@ -340,7 +397,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   Text(
                     monthLabel,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w600),
                   ),
                   IconButton(
                     onPressed: () => _changeMonth(1),
@@ -373,22 +431,35 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  const Row(
                     children: [
-                      const Icon(Icons.account_balance_wallet_rounded,
+                      Icon(Icons.account_balance_wallet_rounded,
                           color: Colors.white70, size: 18),
-                      const SizedBox(width: 6),
-                      const Text('Total Monthly Kharcha',
-                          style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      SizedBox(width: 6),
+                      Text('Net Kharcha (Kharcha - Jama)',
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 13)),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _currency.format(_monthTotal),
+                    _currency.format(_netTotal),
                     style: const TextStyle(
-                        color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _miniStat('Kharcha', _monthExpenseTotal,
+                          Icons.arrow_upward_rounded),
+                      const SizedBox(width: 10),
+                      _miniStat('Jama / Wapsi', _monthIncomeTotal,
+                          Icons.arrow_downward_rounded),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   Text(
                     '${_monthExpenses.length} entries is mahine',
                     style: const TextStyle(color: Colors.white60, fontSize: 12),
@@ -398,7 +469,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 18),
 
-            // Pie chart + category breakdown
+            // Pie chart
             if (activeCats.isNotEmpty) ...[
               Container(
                 padding: const EdgeInsets.all(16),
@@ -406,78 +477,74 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(18),
                 ),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      height: 150,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            flex: 4,
-                            child: PieChart(
-                              PieChartData(
-                                sectionsSpace: 2,
-                                centerSpaceRadius: 32,
-                                sections: activeCats.map((entry) {
-                                  final pct = (_monthTotal == 0)
-                                      ? 0
-                                      : (entry.value / _monthTotal * 100);
-                                  return PieChartSectionData(
-                                    color: entry.key.color,
-                                    value: entry.value,
-                                    title: pct >= 8 ? '${pct.toStringAsFixed(0)}%' : '',
-                                    radius: 42,
-                                    titleStyle: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
+                child: SizedBox(
+                  height: 150,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 4,
+                        child: PieChart(
+                          PieChartData(
+                            sectionsSpace: 2,
+                            centerSpaceRadius: 32,
+                            sections: activeCats.map((entry) {
+                              final pct = (_monthExpenseTotal == 0)
+                                  ? 0
+                                  : (entry.value / _monthExpenseTotal * 100);
+                              return PieChartSectionData(
+                                color: entry.key.color,
+                                value: entry.value,
+                                title: pct >= 8
+                                    ? '${pct.toStringAsFixed(0)}%'
+                                    : '',
+                                radius: 42,
+                                titleStyle: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white),
+                              );
+                            }).toList(),
                           ),
-                          Expanded(
-                            flex: 5,
-                            child: ListView(
-                              padding: EdgeInsets.zero,
-                              children: activeCats.take(6).map((entry) {
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 3),
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: entry.key.color,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          entry.key.label,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 11.5),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ],
+                      Expanded(
+                        flex: 5,
+                        child: ListView(
+                          padding: EdgeInsets.zero,
+                          children: activeCats.take(6).map((entry) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 3),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      color: entry.key.color,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      entry.key.label,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11.5),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(height: 18),
-            ],
 
-            // Category breakdown grid
-            if (activeCats.isNotEmpty) ...[
+              // Category grid header
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -488,9 +555,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: Colors.grey[800])),
                   if (activeCats.length > 4)
                     TextButton(
-                      onPressed: () =>
-                          setState(() => _showAllCategories = !_showAllCategories),
-                      child: Text(_showAllCategories ? 'Kam dikhayen' : 'Sab dikhayen'),
+                      onPressed: () => setState(
+                          () => _showAllCategories = !_showAllCategories),
+                      child: Text(
+                          _showAllCategories ? 'Kam dikhayen' : 'Sab dikhayen'),
                     ),
                 ],
               ),
@@ -509,7 +577,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   final cat = visibleCats[i].key;
                   final total = visibleCats[i].value;
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
@@ -533,10 +602,13 @@ class _HomeScreenState extends State<HomeScreen> {
                               Text(cat.label,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 11.5, color: Colors.black54)),
+                                  style: const TextStyle(
+                                      fontSize: 11.5, color: Colors.black54)),
                               Text(
                                 _currency.format(total),
-                                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
+                                style: const TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.bold),
                               ),
                             ],
                           ),
@@ -551,7 +623,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
             Text('Is Mahine ki Entries',
                 style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[800])),
             const SizedBox(height: 10),
 
             if (_monthExpenses.isEmpty)
@@ -560,9 +634,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Center(
                   child: Column(
                     children: [
-                      Icon(Icons.receipt_long_rounded, size: 48, color: Colors.grey[300]),
+                      Icon(Icons.receipt_long_rounded,
+                          size: 48, color: Colors.grey[300]),
                       const SizedBox(height: 10),
-                      Text('Koi expense nahi mila.\n"Kharcha Likhein" button dabayen.',
+                      Text('Koi entry nahi mili.\n"Likhein" button dabayein.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey[500])),
                     ],
@@ -571,7 +646,8 @@ class _HomeScreenState extends State<HomeScreen> {
               )
             else
               ..._groupedByDay.entries.map((group) {
-                final dayTotal = group.value.fold(0.0, (s, e) => s + e.amount);
+                final dayNet = group.value.fold(
+                    0.0, (s, e) => s + (e.isIncome ? -e.amount : e.amount));
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 14),
                   child: Column(
@@ -587,8 +663,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                     fontSize: 12.5,
                                     fontWeight: FontWeight.w600,
                                     color: Colors.grey[500])),
-                            Text(_currency.format(dayTotal),
-                                style: TextStyle(fontSize: 12.5, color: Colors.grey[500])),
+                            Text(_currency.format(dayNet),
+                                style: TextStyle(
+                                    fontSize: 12.5, color: Colors.grey[500])),
                           ],
                         ),
                       ),
@@ -621,6 +698,7 @@ class _ExpenseTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isIncome = expense.isIncome;
     return Dismissible(
       key: ValueKey(expense.id),
       direction: DismissDirection.endToStart,
@@ -650,7 +728,8 @@ class _ExpenseTile extends StatelessWidget {
                 color: expense.category.color.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(expense.category.icon, color: expense.category.color, size: 20),
+              child: Icon(expense.category.icon,
+                  color: expense.category.color, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -658,21 +737,27 @@ class _ExpenseTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(expense.category.label,
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 14)),
                   if (expense.note.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
                       child: Text(expense.note,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                          style:
+                              TextStyle(fontSize: 12, color: Colors.grey[600])),
                     ),
                 ],
               ),
             ),
             Text(
-              currency.format(expense.amount),
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5),
+              (isIncome ? '- ' : '') + currency.format(expense.amount),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14.5,
+                color: isIncome ? const Color(0xFF1E9E5A) : Colors.black87,
+              ),
             ),
           ],
         ),
@@ -681,7 +766,7 @@ class _ExpenseTile extends StatelessWidget {
   }
 }
 
-/// ------------------- ADD EXPENSE SHEET -------------------
+/// ------------------- ADD ENTRY SHEET -------------------
 class AddExpenseSheet extends StatefulWidget {
   const AddExpenseSheet({super.key});
 
@@ -690,6 +775,7 @@ class AddExpenseSheet extends StatefulWidget {
 }
 
 class _AddExpenseSheetState extends State<AddExpenseSheet> {
+  bool _isIncome = false; // false = Kharcha, true = Jama / Wapsi (minus)
   ExpenseCategory _category = ExpenseCategory.daily;
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
@@ -720,22 +806,60 @@ class _AddExpenseSheetState extends State<AddExpenseSheet> {
       );
       return;
     }
-    final expense = Expense(
+    final entry = Expense(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      category: _category,
+      category: _isIncome ? ExpenseCategory.income : _category,
       amount: amount,
       note: _noteController.text.trim(),
       date: _date,
     );
-    Navigator.pop(context, expense);
+    Navigator.pop(context, entry);
+  }
+
+  Widget _typeButton(String label, IconData icon, bool value, Color color) {
+    final selected = _isIncome == value;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => setState(() => _isIncome = value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: selected ? color.withOpacity(0.15) : Colors.grey[100],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? color : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: selected ? color : Colors.black54)),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final expenseCategories = ExpenseCategory.values
+        .where((c) => c != ExpenseCategory.income)
+        .toList();
+
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: DraggableScrollableSheet(
-        initialChildSize: 0.85,
+        initialChildSize: 0.88,
         minChildSize: 0.5,
         maxChildSize: 0.95,
         expand: false,
@@ -760,65 +884,108 @@ class _AddExpenseSheetState extends State<AddExpenseSheet> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Naya Kharcha Likhein',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text('Nayi Entry',
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 14),
+
+                // Kharcha / Jama toggle
+                Row(
+                  children: [
+                    _typeButton('Kharcha (+)', Icons.arrow_upward_rounded, false,
+                        const Color(0xFFD6484F)),
+                    const SizedBox(width: 10),
+                    _typeButton('Jama / Wapsi (-)',
+                        Icons.arrow_downward_rounded, true,
+                        const Color(0xFF1E9E5A)),
+                  ],
+                ),
                 const SizedBox(height: 16),
 
-                const Text('Category chunein',
-                    style: TextStyle(fontSize: 13, color: Colors.black54)),
-                const SizedBox(height: 10),
-
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: ExpenseCategory.values.length,
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 0.85,
-                  ),
-                  itemBuilder: (context, i) {
-                    final cat = ExpenseCategory.values[i];
-                    final selected = _category == cat;
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () => setState(() => _category = cat),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: selected ? cat.color.withOpacity(0.15) : Colors.grey[100],
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: selected ? cat.color : Colors.transparent,
-                            width: 1.5,
+                if (!_isIncome) ...[
+                  const Text('Category chunein',
+                      style: TextStyle(fontSize: 13, color: Colors.black54)),
+                  const SizedBox(height: 10),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: expenseCategories.length,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 0.85,
+                    ),
+                    itemBuilder: (context, i) {
+                      final cat = expenseCategories[i];
+                      final selected = _category == cat;
+                      return InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => setState(() => _category = cat),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? cat.color.withOpacity(0.15)
+                                : Colors.grey[100],
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: selected ? cat.color : Colors.transparent,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(cat.icon, color: cat.color, size: 22),
+                              const SizedBox(height: 6),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                child: Text(
+                                  cat.label,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(cat.icon, color: cat.color, size: 22),
-                            const SizedBox(height: 6),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              child: Text(
-                                cat.label,
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w500),
-                              ),
-                            ),
-                          ],
+                      );
+                    },
+                  ),
+                ] else
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E9E5A).withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 18, color: Color(0xFF1E9E5A)),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Yeh amount total kharcha se MINUS ho jayegi '
+                            '(jaise wapsi, refund, ya mile hue paise).',
+                            style: TextStyle(fontSize: 12.5),
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 18),
 
                 TextField(
                   controller: _amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   decoration: InputDecoration(
                     labelText: 'Amount (Rs)',
                     prefixIcon: const Icon(Icons.currency_rupee),
@@ -850,7 +1017,8 @@ class _AddExpenseSheetState extends State<AddExpenseSheet> {
                 InkWell(
                   onTap: _pickDate,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 14, horizontal: 14),
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
                       borderRadius: BorderRadius.circular(12),
@@ -872,9 +1040,11 @@ class _AddExpenseSheetState extends State<AddExpenseSheet> {
                   child: ElevatedButton(
                     onPressed: _submit,
                     style: ElevatedButton.styleFrom(
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: const Text('Save Kharcha', style: TextStyle(fontSize: 15)),
+                    child: Text(_isIncome ? 'Save Jama' : 'Save Kharcha',
+                        style: const TextStyle(fontSize: 15)),
                   ),
                 ),
               ],
