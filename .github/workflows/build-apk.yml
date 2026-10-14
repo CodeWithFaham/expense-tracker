@@ -32,7 +32,21 @@ jobs:
             sed -i -E 's/(kotlin\.android["'"'"']?[[:space:]]*\)?[[:space:]]*version[[:space:]]*["'"'"'])[0-9.]+/\11.9.24/' "$FILE"
           fi
 
+      - name: App name
+        run: |
+          sed -i 's/android:label="[^"]*"/android:label="Mera Kharcha"/' android/app/src/main/AndroidManifest.xml
+
+      - name: Use fixed signing key (so future updates keep your data)
+        run: |
+          if [ -f debug.keystore ]; then
+            mkdir -p ~/.android
+            cp debug.keystore ~/.android/debug.keystore
+          fi
+
       - run: flutter pub get
+
+      - name: Generate app icon
+        run: dart run flutter_launcher_icons
 
       - run: flutter build apk --release
 
